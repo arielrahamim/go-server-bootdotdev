@@ -1,17 +1,23 @@
 package main
 
 import (
+	"chirpy/internal/database"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	_ "github.com/lib/pq"
 )
 
 // Struct to define metrics data
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries *database.Queries
 }
 
 // middleware to increment the fileserver hits
@@ -130,9 +136,24 @@ func ValidateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 // go runtime runs main automatically
 func main() {
+
+	// DB Setup
+	dbURL := os.Getenv("DB_URL")
+	db, err1 := sql.Open("postgres", dbURL)
+	if err1 != nil {
+		log.Fatal(nil)
+		return
+	}
+
+	// SQLC Setup
+	dbQueries := database.New(db)
+
 	// one 'box' in memory to save the metrics data in
 	// initialized in main
 	cfg := &apiConfig{}
+
+	// Update the apiConfig{} struct to hold db config
+	cfg.dbQueries = dbQueries
 
 	// create a new multiplexer (router)
 	mux := http.NewServeMux()
