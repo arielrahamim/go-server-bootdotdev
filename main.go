@@ -14,6 +14,13 @@ import (
 	_ "github.com/lib/pq"
 )
 
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
 // Struct to define metrics data
 type apiConfig struct {
 	fileserverHits atomic.Int32
@@ -60,6 +67,11 @@ func (cfg *apiConfig) ResetMetricsHandler(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Metrics reset"))
 }
+
+func (user *User) CreateUser(email user.Email) (userID user.ID, userCreated users.CreatedAt, user.Updated users.UpdatedAt, users.Email users.Email) {
+
+}
+
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	type jsonErrorStruct struct {
@@ -159,10 +171,10 @@ func main() {
 	mux := http.NewServeMux()
 
 	// declare endpoints
-
 	// API
 	mux.HandleFunc("GET /api/healthz", HealthzHandler)
 	mux.HandleFunc("POST /api/validate_chirp", ValidateChirpHandler)
+	mux.HandleFunc("POST" "/api/users", UsersHandler)
 	// Admin
 	mux.HandleFunc("GET /admin/metrics", cfg.MetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.ResetMetricsHandler)
@@ -183,6 +195,7 @@ func main() {
 
 	// listen and serve the server
 	log.Println("listening on port", srv.Addr)
+
 	err := srv.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
