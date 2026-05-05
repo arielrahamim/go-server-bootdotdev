@@ -10,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
+	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
 )
@@ -24,7 +27,8 @@ type User struct {
 // Struct to define metrics data
 type apiConfig struct {
 	fileserverHits atomic.Int32
-	dbQueries *database.Queries
+	dbQueries      *database.Queries
+	platform       string
 }
 
 // middleware to increment the fileserver hits
@@ -60,18 +64,60 @@ func HealthzHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-// ResetMetricsHandler resets the metrics to 0.
+// ResetMetricsHandler resets the metrics to 0 && delete all users
 func (cfg *apiConfig) ResetMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return 
+	}
+
+	err := cfg.dbQueries.DeleteAllUsers(r.Context())
+	if err != nil {
+		http.Error(w, "Error While Deleting All Users...", 500)
+		return
+	}
+	
+
 	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Metrics reset"))
 }
 
-func (user *User) CreateUser(email user.Email) (userID user.ID, userCreated users.CreatedAt, user.Updated users.UpdatedAt, users.Email users.Email) {
+func (cfg *apiConfig) UsersHandler(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Email string `json:"email"`
+	}
 
+	payload := req{}
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&payload)
+	if err != nil {
+		respondWithError(w, 400, err.Error())
+		return
+	}
+
+	if payload.Email == "" {
+		respondWithError(w, 400, "email is required")
+		return
+	}
+
+	dbUser, err := cfg.dbQueries.CreateUser(r.Context(), payload.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create user")
+		return
+	}
+
+	respUser := User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	}
+
+	respondWithJson(w, http.StatusCreated, respUser)
+	return
 }
-
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	type jsonErrorStruct struct {
@@ -148,6 +194,7 @@ func ValidateChirpHandler(w http.ResponseWriter, r *http.Request) {
 
 // go runtime runs main automatically
 func main() {
+	godotenv.Load()
 
 	// DB Setup
 	dbURL := os.Getenv("DB_URL")
@@ -160,12 +207,18 @@ func main() {
 	// SQLC Setup
 	dbQueries := database.New(db)
 
+	// 'auth'
+	platform := os.Getenv("PLATFORM")
+
 	// one 'box' in memory to save the metrics data in
 	// initialized in main
 	cfg := &apiConfig{}
 
 	// Update the apiConfig{} struct to hold db config
 	cfg.dbQueries = dbQueries
+
+	// users 
+	cfg.platform = platform
 
 	// create a new multiplexer (router)
 	mux := http.NewServeMux()
@@ -174,7 +227,7 @@ func main() {
 	// API
 	mux.HandleFunc("GET /api/healthz", HealthzHandler)
 	mux.HandleFunc("POST /api/validate_chirp", ValidateChirpHandler)
-	mux.HandleFunc("POST" "/api/users", UsersHandler)
+	mux.HandleFunc("POST /api/users", cfg.UsersHandler)
 	// Admin
 	mux.HandleFunc("GET /admin/metrics", cfg.MetricsHandler)
 	mux.HandleFunc("POST /admin/reset", cfg.ResetMetricsHandler)
