@@ -11,17 +11,27 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
 )
 
+// encoding/json lib ignores lower case struct fields!
 type User struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 // Struct to define metrics data
@@ -116,7 +126,6 @@ func (cfg *apiConfig) UsersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJson(w, http.StatusCreated, respUser)
-	return
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -162,34 +171,53 @@ func WordsValidator(body string) (cleaned string) {
 	return
 }
 
-func ValidateChirpHandler(w http.ResponseWriter, r *http.Request) {
-	type inputs struct {
-		Body string `json:"body"`
-	}
-
-	type response struct {
-		CleanedBody string `json:"cleaned_body"`
+func (cfg *apiConfig) ChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	type req struct {
+		Body   string `json:"body"`
+		UserID string `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	input := inputs{}
+	input := req{}
 	err := decoder.Decode(&input)
 	if err != nil {
-		respondWithError(w, 500, err.Error())
+		respondWithError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
+	// Length Validations
 	if len(input.Body) > 140 {
 		respondWithError(w, 400, "Chirp is too long")
 		return
 	}
 
-	cleaned := WordsValidator(input.Body)
+	// Clean Chirp Body for Bad Words
+	input.Body = WordsValidator(input.Body)
 
-	cleanBody := response{
-		CleanedBody: cleaned,
+	userID, err := uuid.Parse(input.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "invalid user_id")
+		return
 	}
 
-	respondWithJson(w, 200, cleanBody)
+	dbChirps, err := cfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   input.Body,
+		UserID: userID,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Could Not Create Chirp")
+		return
+	}
+
+	respChirp := Chirp{
+		ID:        dbChirps.ID,
+		CreatedAt: dbChirps.CreatedAt,
+		UpdatedAt: dbChirps.UpdatedAt,
+		Body:      dbChirps.Body,
+		UserID:    dbChirps.UserID,
+	}
+
+	respondWithJson(w, 201, respChirp)
 }
 
 // go runtime runs main automatically
@@ -226,7 +254,7 @@ func main() {
 	// declare endpoints
 	// API
 	mux.HandleFunc("GET /api/healthz", HealthzHandler)
-	mux.HandleFunc("POST /api/validate_chirp", ValidateChirpHandler)
+	mux.HandleFunc("POST /api/chirps", cfg.ChirpsHandler)
 	mux.HandleFunc("POST /api/users", cfg.UsersHandler)
 	// Admin
 	mux.HandleFunc("GET /admin/metrics", cfg.MetricsHandler)
